@@ -1,0 +1,4 @@
+# requirements.txt
+aiogram>=3.4.1
+yt-dlp>=2024.3.10
+python-dotenv>=1.0.1
