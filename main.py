@@ -13,6 +13,7 @@ from aiogram.filters import CommandStart
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
+from aiohttp import web
 import yt_dlp
 
 load_dotenv()
@@ -30,12 +31,7 @@ logger = logging.getLogger(__name__)
 IG_URL_PATTERN = re.compile(
     r"((?:https?://)?(?:www\.)?instagram\.com/(?:p|reel|reels|tv)/[A-Za-z0-9_-]+/?.*)")
 
-
 def get_video_resolution(filepath: str) -> str:
-    """
-    Молниеносно вытаскивает разрешение напрямую из заголовков медиафайла через ffprobe,
-    если yt-dlp не смог спарсить метаданные с серверов инсты.
-    """
     try:
         cmd = [
             'ffprobe', '-v', 'error',
@@ -52,16 +48,13 @@ def get_video_resolution(filepath: str) -> str:
         logger.error(f"Ошибка ffprobe при чтении файла {filepath}: {e}")
         return "Неизвестно"
 
-
-def extract_instagram_video(url: str, temp_dir: str) -> Optional[
-    Dict[str, Any]]:
+def extract_instagram_video(url: str, temp_dir: str) -> Optional[Dict[str, Any]]:
     ydl_opts = {
         'format': 'best',
         'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
         'geo_bypass': True,
-        # 'cookiefile': 'cookies.txt',
     }
 
     try:
@@ -71,18 +64,14 @@ def extract_instagram_video(url: str, temp_dir: str) -> Optional[
                 return None
 
             filepath = ydl.prepare_filename(info)
-
-            # 1. Пытаемся достать из стандартных полей yt-dlp
             width = info.get('width')
             height = info.get('height')
 
             if width and height:
                 res_str = f"{width}x{height}"
             else:
-                # 2. Ищем в строковом поле 'resolution'
                 res_str = info.get('resolution')
                 if not res_str or 'x' not in res_str:
-                    # 3. Если метаданные инсты пустые (частая проблема), читаем сам скачанный файл
                     res_str = get_video_resolution(filepath)
 
             return {
@@ -92,7 +81,6 @@ def extract_instagram_video(url: str, temp_dir: str) -> Optional[
     except Exception as e:
         logger.error(f"Ошибка yt-dlp при скачивании {url}: {e}")
         return None
-
 
 async def process_download(message: Message, url: str):
     if not url.startswith("http"):
@@ -138,13 +126,11 @@ async def process_download(message: Message, url: str):
 
 dp = Dispatcher()
 
-
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     await message.answer(
         "Отправьте ссылку на видео из Instagram для скачивания"
     )
-
 
 @dp.message(F.text)
 async def handle_text(message: Message):
@@ -154,6 +140,8 @@ async def handle_text(message: Message):
         ig_url = match.group(1)
         asyncio.create_task(process_download(message, ig_url))
 
+async def handle_ping(request):
+    return web.Response(text="Bot is running")
 
 async def main():
     bot = Bot(
@@ -161,14 +149,24 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
 
-    logger.info("Бот запущен. Ожидание сообщений...")
+    # Инициализация фиктивного веб-сервера для прохождения проверок Render
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get('PORT', 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    logger.info(f"Слушатель портов запущен на порту {port}. Ожидание сообщений...")
 
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
-
+        await runner.cleanup()
 
 if __name__ == "__main__":
     try:
